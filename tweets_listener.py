@@ -15,17 +15,20 @@ class TweetStreamListener(tweepy.StreamListener):
         super(tweepy.StreamListener, self).__init__()
         self.api = tweepy_api
         self.kafka_topic = kafka_topic
+
+    def on_connect(self):
         self.producer = KafkaProducer(bootstrap_servers=['localhost:9092'],
                                       value_serializer=lambda x: dumps(x).encode('utf-8'))
 
         try:
             admin = KafkaAdminClient(bootstrap_servers='localhost:9092')
-            topic = NewTopic(name=self.kafka_topic,
+            topic = NewTopic(name="TweetStreamListener",
                              num_partitions=1,
                              replication_factor=1)
             admin.create_topics([topic])
         except Exception as e:
             print("Create Kafka topic failed: " + str(e))
+
 
     def on_status(self, status):
         """ This method is called whenever new data arrives from live stream.
@@ -36,7 +39,7 @@ class TweetStreamListener(tweepy.StreamListener):
         print(status.text)
 
         try:
-            self.producer.send(self.kafka_topic, status.text)
+            self.producer.send("TweetStreamListener", status.text)
         except Exception as e:
             print(e)
             return False
