@@ -142,24 +142,23 @@ def main():
     new_df = removed.withColumn("sentiment", calculate_sentiment("filtered"))
 
     df = new_df \
-        .withWatermark("created_at", "1 seconds") \
-        .groupBy(window(new_df.created_at, "1 minutes"), "created_at").count()
+        .groupBy(window(new_df.created_at, "1 minutes")).avg("sentiment")
 
-    #df = df.withColumn("sentiment", col("avg(sentiment)"))
+    df = df.withColumn("sentiment", col("avg(sentiment)"))
 
     checkpoint = os.path.abspath("tmp") + "/delta/events"
-    delta_output_path = os.path.abspath("tmp") + "/delta/events/_checkpoints/twitter_predictions"
+    #delta_output_path = os.path.abspath("tmp") + "/delta/events/_checkpoints/twitter_predictions"
 
     query = df \
-        .selectExpr("CAST(window AS STRING) as key", "CAST(count AS STRING) as value") \
+        .selectExpr("CAST(window AS STRING) as key", "CAST(sentiment AS STRING) as value") \
         .writeStream \
         .trigger(processingTime = "1 minute") \
         .format("kafka") \
-        .outputMode("update") \
+        .outputMode("complete") \
         .option("kafka.bootstrap.servers", "localhost:9092") \
         .option("topic", "TweetStreamAnalyzer") \
         .option("checkpointLocation", checkpoint) \
-        .start(delta_output_path)
+        .start()
 
     query.awaitTermination()
 
