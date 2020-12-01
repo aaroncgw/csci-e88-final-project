@@ -1,11 +1,8 @@
 import os
 import json
-import argparse
-import datetime
 from json import dumps
 from http.client import IncompleteRead
 import tweepy
-import re
 import pykafka
 
 import pandas as pd
@@ -14,47 +11,22 @@ from kafka import KafkaProducer, KafkaAdminClient
 from kafka.admin import NewTopic
 
 
-# def deEmojify(text):
-#     regrex_pattern = re.compile(pattern = "["
-#         u"\U0001F600-\U0001F64F"  # emoticons
-#         u"\U0001F300-\U0001F5FF"  # symbols & pictographs
-#         u"\U0001F680-\U0001F6FF"  # transport & map symbols
-#         u"\U0001F1E0-\U0001F1FF"  # flags (iOS)
-#                            "]+", flags = re.UNICODE)
-#     return regrex_pattern.sub(r'',text)
-
 class TweetStreamListener(tweepy.StreamListener):
     def __init__(self):
         self.client = pykafka.KafkaClient("localhost:9092")
-        self.producer = self.client.topics[bytes('TweetStreamListener', 'ascii')].get_producer()
+        self.kafka_broker = "localhost:9092"
+        self.kafka_topic = "TweetStreamListener"
 
-    # def on_connect(self):
-    #     self.producer = KafkaProducer(bootstrap_servers=[self.kafka_broker],
-    #                                   value_serializer=lambda x: dumps(x).encode('utf-8'))
-    #
-    #     try:
-    #         admin = KafkaAdminClient(bootstrap_servers=self.kafka_broker)
-    #         topic = NewTopic(name=self.kafka_topic,
-    #                          num_partitions=1,
-    #                          replication_factor=1)
-    #         admin.create_topics([topic])
-    #     except Exception as e:
-    #         print("Create Kafka topic failed: " + str(e))
-
-    #
-    # def on_status(self, status):
-    #     """ This method is called whenever new data arrives from live stream.
-    #             We asynchronously push this data to kafka queue"""
-    #     now = datetime.datetime.now()
-    #     print(now.strftime("%Y-%m-%d %H:%M:%S"))
-    #     print(status.text)
-    #
-    #     try:
-    #         self.producer.send(self.kafka_topic, status.text)
-    #     except Exception as e:
-    #         print(e)
-    #         return False
-    #     return True
+    def on_connect(self):
+        try:
+            self.producer = self.client.topics[bytes('TweetStreamListener', 'ascii')].get_producer()
+            admin = KafkaAdminClient(bootstrap_servers=self.kafka_broker)
+            topic = NewTopic(name=self.kafka_topic,
+                             num_partitions=1,
+                             replication_factor=1)
+            admin.create_topics([topic])
+        except Exception as e:
+            print("Create Kafka topic failed: " + str(e))
 
     def on_data(self, data):
         try:
@@ -64,12 +36,6 @@ class TweetStreamListener(tweepy.StreamListener):
                 tweet_text = tweet['extended_tweet']['full_text']
             else:
                 tweet_text = tweet['text']
-
-            # if tweet_text:
-            #     data = {
-            #         'created_at': tweet['created_at'],
-            #         'tweet': tweet_text.replace(',', '')
-            #     }
 
             if tweet_text:
                 send_data = '{}'
@@ -94,11 +60,6 @@ class TweetStreamListener(tweepy.StreamListener):
 
 
 def main():
-    # parser = argparse.ArgumentParser()
-    # parser.add_argument("--topic", default="TweetStreamListener")
-    #
-    # args = parser.parse_args()
-
     LOCAL_ROOT = os.path.abspath("data") + os.sep
     df = pd.read_csv(LOCAL_ROOT + "twitter_users.csv")
     user_ids = df["id"].apply(str).to_list()

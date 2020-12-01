@@ -10,8 +10,6 @@ pandas = "*"
 tweepy = "*"
 kafka-python = "*"
 pyspark = "==2.4.5"
-bson = "*"
-pymongo = "*"
 pykafka = "*"
 
 [requires]
