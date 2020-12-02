@@ -1,11 +1,18 @@
 import os
+import re
 import pickle
 from datetime import datetime
 
+from pyspark.sql.types import StringType, StructType, StructField, TimestampType, DoubleType, ArrayType, ByteType, IntegerType
+from pyspark.sql.functions import udf, from_json, Column, window, unix_timestamp, col, slice
+
+
+from pyspark import SparkContext
 from pyspark.sql.session import SparkSession
-from pyspark.sql.types import StringType, StructType, StructField, TimestampType, FloatType
-from pyspark.sql.functions import udf, from_json, col, window, unix_timestamp
-from pyspark.ml.feature import StopWordsRemover, Tokenizer
+import pyspark.sql.types as tp
+from pyspark.ml import Pipeline
+from pyspark.ml.feature import StopWordsRemover, Word2Vec, RegexTokenizer
+from pyspark.ml.classification import LogisticRegression
 
 
 class TweetStreamAnalyzer:
@@ -16,6 +23,8 @@ class TweetStreamAnalyzer:
 
         with open(LOCAL_ROOT + 'sentiment_neg_dict.pickle', 'rb') as handle:
             self.negDict = pickle.load(handle)
+
+        self.train_model()
 
     def calc_sentiment(self, words):
         positive = 0
@@ -29,6 +38,30 @@ class TweetStreamAnalyzer:
             return (positive - negative) / (positive + negative) / len(words)
         else:
             return 0
+
+    def train_model(self):
+        sc = SparkContext(appName="PySparkShell")
+        spark = SparkSession(sc)
+
+        train_data_schema = tp.StructType([
+            tp.StructField(name='id', dataType=tp.IntegerType(), nullable=True),
+            tp.StructField(name='label', dataType=tp.IntegerType(), nullable=True),
+            tp.StructField(name='tweet', dataType=tp.StringType(), nullable=True)
+        ])
+
+        LOCAL_ROOT = os.path.abspath("data") + os.sep
+
+        train_data = spark.read.csv(LOCAL_ROOT + 'twitter_sentiments.csv',
+                                 schema=train_data_schema, header=True)
+
+        stage_1 = RegexTokenizer(inputCol='tweet', outputCol='tokens', pattern='\\W')
+        stage_2 = StopWordsRemover(inputCol='tokens', outputCol='filtered_words')
+        stage_3 = Word2Vec(inputCol='filtered_words', outputCol='vector', vectorSize=100)
+        model = LogisticRegression(featuresCol='vector', labelCol='label')
+        pipeline = Pipeline(stages=[stage_1, stage_2, stage_3, model])
+        self.pipelineFit = pipeline.fit(train_data)
+
+        print("Done!")
 
     def run(self):
         spark = SparkSession.builder.appName("TweetStreamAnalyzer").getOrCreate()
@@ -59,18 +92,35 @@ class TweetStreamAnalyzer:
         tweets_table = tweets_table.withColumn("created_at", date_process(tweets_table['created_at']))
         tweets_table = tweets_table.withColumn("created_at", unix_timestamp('created_at', "yyyy-MM-dd HH:mm:ss").cast(TimestampType()))
 
-        tokenizer = Tokenizer(inputCol="tweet", outputCol="words")
-        tokenized = tokenizer.transform(tweets_table)
-        remover = StopWordsRemover(inputCol="words", outputCol="filtered")
-        removed = remover.transform(tokenized)
+        pre_process = udf(
+            lambda x: re.sub(r'[^A-Za-z\n ]|(http\S+)|(www.\S+)', '', x.lower().strip()), StringType()
+        )
+        tweets_table = tweets_table.withColumn("cleaned_data", pre_process(tweets_table.tweet)).dropna()
+        prediction = self.pipelineFit.transform(tweets_table).select("created_at", "probability")
 
-        calculate_sentiment = udf(self.calc_sentiment, FloatType())
-        cleaned_df = removed.withColumn("sentiment", calculate_sentiment("filtered"))
+        def extract_prob(v):
+            try:
+                return float(v[1])  # VectorUDT is of length 2
+            except ValueError:
+                return None
 
-        df = cleaned_df \
-            .groupBy(window(cleaned_df.created_at, "1 minutes")).avg("sentiment")
+        extract_prob_udf = udf(extract_prob, DoubleType())
+        prediction = prediction.withColumn("probability", extract_prob_udf(col("probability")))
 
-        df = df.withColumn("sentiment", col("avg(sentiment)"))
+        # for dictioinary approach
+        # tokenizer = Tokenizer(inputCol="tweet", outputCol="words")
+        # tokenized = tokenizer.transform(tweets_table)
+        # remover = StopWordsRemover(inputCol="words", outputCol="filtered")
+        # removed = remover.transform(tokenized)
+        #
+        # calculate_sentiment = udf(self.calc_sentiment, FloatType())
+        # prediction = removed.withColumn("prediction", calculate_sentiment("filtered"))
+
+
+        df = prediction \
+            .groupBy(window(prediction.created_at, "1 minutes")).avg("probability")
+
+        df = df.withColumn("sentiment", col("avg(probability)"))
 
         checkpoint = os.path.abspath("tmp") + "/checkpoint"
 
@@ -81,9 +131,15 @@ class TweetStreamAnalyzer:
             .format("kafka") \
             .outputMode("complete") \
             .option("kafka.bootstrap.servers", "localhost:9092") \
-            .option("topic", "TweetStreamAnalyzer") \
+            .option("topic", "TweetStreamSentiments") \
             .option("checkpointLocation", checkpoint) \
             .start()
+
+
+        # query = prediction \
+        #     .writeStream \
+        #     .format("console") \
+        #     .start()
 
         query.awaitTermination()
 
