@@ -1,32 +1,24 @@
 import os
 import json
-from json import dumps
 from http.client import IncompleteRead
 import tweepy
 import pykafka
-
 import pandas as pd
-
-from kafka import KafkaProducer, KafkaAdminClient
-from kafka.admin import NewTopic
+from elasticsearch import Elasticsearch
 
 
 class TweetStreamListener(tweepy.StreamListener):
     def __init__(self):
         self.client = pykafka.KafkaClient("localhost:9092")
-        self.kafka_broker = "localhost:9092"
         self.kafka_topic = "TweetStreamListener"
+        self.producer = self.client.topics[bytes(self.kafka_topic, 'ascii')].get_producer()
+
+        self.es = Elasticsearch('https://db2cb7cbe8834bb1a48f960a437f461d.us-east-1.aws.found.io:9243',
+                                http_auth=(os.environ["ELASTIC_USERNAME"], os.environ["ELASTIC_PASSWORD"]))
+        print("Connecting...")
 
     def on_connect(self):
-        try:
-            self.producer = self.client.topics[bytes('TweetStreamListener', 'ascii')].get_producer()
-            admin = KafkaAdminClient(bootstrap_servers=self.kafka_broker)
-            topic = NewTopic(name=self.kafka_topic,
-                             num_partitions=1,
-                             replication_factor=1)
-            admin.create_topics([topic])
-        except Exception as e:
-            print("Create Kafka topic failed: " + str(e))
+        print("Connected!")
 
     def on_data(self, data):
         try:
@@ -42,6 +34,7 @@ class TweetStreamListener(tweepy.StreamListener):
                 json_send_data = json.loads(send_data)
                 json_send_data['tweet'] = tweet_text.replace(',', '')
                 json_send_data['created_at'] = tweet['created_at']
+                self.es.index(index=self.kafka_topic.lower(), body=json_send_data)
                 self.producer.produce(bytes(json.dumps(json_send_data),'ascii'))
                 print("Published to Kafka: " + str(json_send_data))
         except Exception as e:
