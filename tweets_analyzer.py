@@ -17,27 +17,7 @@ from pyspark.ml.classification import LogisticRegression
 
 class TweetStreamAnalyzer:
     def __init__(self):
-        LOCAL_ROOT = os.path.abspath("data") + os.sep
-        with open(LOCAL_ROOT + 'sentiment_pos_dict.pickle', 'rb') as handle:
-            self.posDict = pickle.load(handle)
-
-        with open(LOCAL_ROOT + 'sentiment_neg_dict.pickle', 'rb') as handle:
-            self.negDict = pickle.load(handle)
-
         self.train_model()
-
-    def calc_sentiment(self, words):
-        positive = 0
-        negative = 0
-        for word in words:
-            if word in self.posDict:
-                positive = positive + 1
-            elif word in self.negDict:
-                negative = negative + 1
-        if len(words) > 0 and (positive + negative) > 0:
-            return (positive - negative) / (positive + negative) / len(words)
-        else:
-            return 0
 
     def train_model(self):
         sc = SparkContext(appName="PySparkShell")
@@ -51,7 +31,7 @@ class TweetStreamAnalyzer:
 
         LOCAL_ROOT = os.path.abspath("data") + os.sep
 
-        train_data = spark.read.csv(LOCAL_ROOT + 'twitter_sentiments.csv',
+        train_data = spark.read.csv(LOCAL_ROOT + 'twitter_sentiments_train.csv',
                                  schema=train_data_schema, header=True)
 
         stage_1 = RegexTokenizer(inputCol='tweet', outputCol='tokens', pattern='\\W')
@@ -81,23 +61,23 @@ class TweetStreamAnalyzer:
             .load() \
             .selectExpr("CAST(timestamp AS TIMESTAMP) as timestamp", "CAST(value AS STRING) as message")
 
+        # map message to two columns created_at and tweet which are the values coming from tweet_listener through Kafka
         tweets_table = kafka_df.withColumn("message", from_json(col("message"), schema)).select("timestamp", "message.*")
 
         date_process = udf(
-            lambda x: datetime.strftime(
-                datetime.strptime(x, '%a %b %d %H:%M:%S +0000 %Y'), '%Y-%m-%d %H:%M:%S'
-            )
+            lambda x: datetime.strftime(datetime.strptime(x, '%a %b %d %H:%M:%S +0000 %Y'), '%Y-%m-%d %H:%M:%S')
         )
-
         tweets_table = tweets_table.withColumn("created_at", date_process(tweets_table['created_at']))
         tweets_table = tweets_table.withColumn("created_at", unix_timestamp('created_at', "yyyy-MM-dd HH:mm:ss").cast(TimestampType()))
 
+        # remove weblink and special characters
         pre_process = udf(
             lambda x: re.sub(r'[^A-Za-z\n ]|(http\S+)|(www.\S+)', '', x.lower().strip()), StringType()
         )
         tweets_table = tweets_table.withColumn("cleaned_data", pre_process(tweets_table.tweet)).dropna()
         prediction = self.pipelineFit.transform(tweets_table).select("created_at", "probability")
 
+        # extract the 1(positive) sentiment probability
         def extract_prob(v):
             try:
                 return float(v[1])  # VectorUDT is of length 2
@@ -107,23 +87,12 @@ class TweetStreamAnalyzer:
         extract_prob_udf = udf(extract_prob, DoubleType())
         prediction = prediction.withColumn("probability", extract_prob_udf(col("probability")))
 
-        # for dictioinary approach
-        # tokenizer = Tokenizer(inputCol="tweet", outputCol="words")
-        # tokenized = tokenizer.transform(tweets_table)
-        # remover = StopWordsRemover(inputCol="words", outputCol="filtered")
-        # removed = remover.transform(tokenized)
-        #
-        # calculate_sentiment = udf(self.calc_sentiment, FloatType())
-        # prediction = removed.withColumn("prediction", calculate_sentiment("filtered"))
-
-
+        # window operation: calculate the average probability in 1 minute window
         df = prediction \
             .groupBy(window(prediction.created_at, "1 minutes")).avg("probability")
-
         df = df.withColumn("sentiment", col("avg(probability)"))
 
-        checkpoint = os.path.abspath("tmp") + "/checkpoint"
-
+        checkpoint = os.getcwd() + "/checkpoint"
         query = df \
             .selectExpr("CAST(window AS STRING) as key", "CAST(sentiment AS STRING) as value") \
             .writeStream \
@@ -134,12 +103,6 @@ class TweetStreamAnalyzer:
             .option("topic", "TweetStreamSentiments") \
             .option("checkpointLocation", checkpoint) \
             .start()
-
-
-        # query = prediction \
-        #     .writeStream \
-        #     .format("console") \
-        #     .start()
 
         query.awaitTermination()
 

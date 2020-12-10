@@ -16,7 +16,7 @@ def main():
     for msg in consumer:
         try:
             timestamp = datetime.strptime(msg.partition_key.decode().split(',')[1][1:-1], '%Y-%m-%d %H:%M:%S')
-            eventTime = timestamp.strftime('%Y-%m-%dT%H:%M:%S.%f%z')
+            eventTime = timestamp.strftime('%Y-%m-%dT%H:%M:%S.%f%z')  #elasticsearch is only able to identify timestamp in this format
             json_send_data = {"timestamp" : eventTime,
                               "sentiment_score" : float(msg.value.decode())}
 

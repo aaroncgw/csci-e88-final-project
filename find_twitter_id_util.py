@@ -1,6 +1,7 @@
 import os
 import pandas as pd
 import tweepy
+import csv
 
 
 def get_tweet_ids():
@@ -10,11 +11,10 @@ def get_tweet_ids():
     api = tweepy.API(auth)
 
     LOCAL_ROOT = os.path.abspath("data") + os.sep
-    import csv
 
-    if not os.path.isfile(LOCAL_ROOT + "twitter_users.csv"):
+    if not os.path.isfile(LOCAL_ROOT + "twitter_userid.csv"):
         users  = {'name' : [], 'id' : []}
-        with open(LOCAL_ROOT + 'handles.csv', newline='') as f:
+        with open(LOCAL_ROOT + 'twitter_username.csv', newline='') as f:
             for row in csv.reader(f):
                 try:
                     users['id'].append(api.get_user(row[0]).id_str)
