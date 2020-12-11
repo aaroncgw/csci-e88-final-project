@@ -13,12 +13,12 @@ def get_tweet_ids():
     LOCAL_ROOT = os.path.abspath("data") + os.sep
 
     if not os.path.isfile(LOCAL_ROOT + "twitter_userid.csv"):
-        users  = {'name' : [], 'id' : []}
-        with open(LOCAL_ROOT + 'twitter_username.csv', newline='') as f:
+        users = {"name": [], "id": []}
+        with open(LOCAL_ROOT + "twitter_username.csv", newline="") as f:
             for row in csv.reader(f):
                 try:
-                    users['id'].append(api.get_user(row[0]).id_str)
-                    users['name'].append(row[0])
+                    users["id"].append(api.get_user(row[0]).id_str)
+                    users["name"].append(row[0])
                 except Exception as e:
                     print(e)
                     print(row[0])
@@ -27,7 +27,7 @@ def get_tweet_ids():
             df = pd.DataFrame(users, columns=["name", "id"])
             df.to_csv(LOCAL_ROOT + "twitter_users.csv")
         else:
-           raise Exception("No user id found!")
+            raise Exception("No user id found!")
     else:
         df = pd.read_csv(LOCAL_ROOT + "twitter_users.csv")
 
